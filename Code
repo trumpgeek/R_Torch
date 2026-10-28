@@ -1,0 +1,134 @@
+# YouTube link: https://youtu.be/XVfn6IpoUPU
+#install.packages("keras")
+library(torch)
+library(torchvision)
+library(luz)
+
+# Get the data
+# Data
+#data <- read.csv('data/Cardiotocographic.csv', header=T)
+data <- read.csv('https://raw.githubusercontent.com/bkrai/DeepLearningR/master/Cardiotocographic.csv', header=T)
+# We will predict NSP, which is a categorical variable so we need to 
+# Prepare it for one-hot-encoding it has to be base 0
+head(data) # let's view the data
+#data$NSP <- data$NSP - 1 # this is the base 0 for categories
+# Let's view the data to see the distribution
+barplot(prop.table(table(data$NSP)),
+        col = rainbow(3),
+        ylim = c(0, 0.8),
+        ylab = 'Proportion',
+        xlab = 'NSP',
+        cex.names = 1.5)
+#make categorical NSP
+cardio_ds <- dataset (
+  name = "CardioToCO",
+  
+  initialize  = function(input){
+    input$NSP <- as.factor(input$NSP) # we need to make sure the categorical data to be predicted is a factor, here it is not so we ensure it to be so
+    input$NSP <- as.integer(input$NSP)
+    input <- as.matrix(input)
+    dimnames(input) <- NULL 
+    input [,1:21] <- scale(input[,1:21])
+    # there is assumption that the dataset will have an x part - the predictor features and a y part that has the target feature to predict
+    self$x <- torch_tensor(input[,-22])
+    self$y <- torch_tensor(input[, 22], dtype = torch_long()) # the target to be predicted should be long or we will not get an error on data type.
+    
+  },
+  
+  .getitem = function(index){
+    x<- self$x[index,]
+    y<- self$y[index]
+    list(x,y)
+    
+  },
+  
+  .length = function(){
+    self$y$size()[[1]]
+    
+  }
+  
+)
+# We must convert the dataframe into a matrix - for Keras Tensor Flow?
+
+
+patient <- cardio_ds(data)
+
+# partition the data into training and test
+set.seed(1234)
+train_ind <- sample(1:length(patient), size = 0.7 * length(patient))
+train_ds <- dataset_subset(patient, indices = train_ind )
+
+test_ind <- sample(setdiff(1:length(patient),train_ind) ,size = 0.3*length(patient))
+test_ds <- dataset_subset(patient, indices = test_ind )
+
+
+train_dl <-dataloader(train_ds, batch_size = 21,  shuffle = TRUE)
+test_dl <-dataloader(test_ds, batch_size = 21)
+# Create sequential model and add layers 
+#
+# define the model
+net = nn_module(
+  "class_net",
+  
+  initialize = function(d_in, d_hidden, d_out){
+    
+      self$net <- nn_sequential(
+      nn_dropout(0.5),
+      nn_linear(d_in, d_hidden),
+      nn_relu(),
+      nn_linear(d_hidden, d_out)
+              , nn_softmax(2)
+    )
+  },
+  
+  forward = function(x){
+    
+    self$net(x)
+    
+  }
+  
+)
+
+d_in <- 21
+d_hidden <- 8
+d_out <- 3
+mymodel <- net (d_in, d_hidden, d_out)
+
+fitted <- net |> 
+  setup( 
+    loss = nn_nll_loss(),
+    optimizer = optim_adam
+    ) |>
+  set_hparams(d_in = d_in, d_hidden = d_hidden, d_out = d_out ) |>
+  #fit (train_dl, epochs = 40, valid_data = test_dl)
+  fit (train_ds, epochs = 40)
+# let's plot the loss function as tracked 
+print(plot(fitted))
+#to predict 
+predictions <- predict(fitted, test_ds)
+# We are dealing w a categorical prediction so let's get the one that has the most probability we use torch_argmax
+fitted |> evaluate(test_ds)
+pred <- predictions |> apply(1, FUN = torch_argmax)
+# we need to translate the predictions to the category indexes
+giveInt <- function (x) {as.integer(x)}
+  
+ 
+#newpred <- function () {
+#    temp <- c()
+#    for (i in 1:length(pred)){
+#      temp <- append(temp, giveInt(pred[[i]]))
+#    }
+#   return(temp)
+#  }
+
+# As we said we do not do for loops so here is the substiture code
+
+#Unlist and clean up the predictions 
+newpreds <- lapply(pred, FUN = function(x) append(temp, giveInt(x)))
+
+mypreds <- unlist(newpreds)
+# Get back the test data from the ds tensors
+test_y <- test_ds$dataset$y[test_ds$indices] |> as.integer()
+
+# present the confusion matrix to view
+print(table (mypreds, test_y))
